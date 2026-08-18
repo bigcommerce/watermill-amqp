@@ -1,43 +1,33 @@
 <!--
-Thanks for contributing to Watermill!
+This is BigCommerce's fork of ThreeDotsLabs/watermill-amqp.
 
-The following template aims to help contributors write a good description for their pull requests.
-**The more information you provide, the faster we will be able to review and merge your PR.**
+Keep the fix itself separate from BigCommerce-specific changes (module path, CircleCI) so it stays
+cherry-pickable upstream. See the fork section in README.md.
 
-Feel free to skip this template for minor changes like typo fixes.
-
+If this change belongs upstream, raise it against ThreeDotsLabs/watermill-amqp as well, branched
+from upstream/master rather than from this fork's master.
 -->
 
-### Motivation / Background
+## What/Why?
+
+### Human
+
+<!-- Plain English: the problem, and what you did about it. No class names, paths or config keys. -->
+
+### Agent
+
+<!-- The full technical detail: what changed, why, and what you considered and rejected. -->
+
+## Rollout/Rollback
 
 <!--
-
-Explain the purpose of this Pull Request:
-- What issue or bug does it address?
-- What new functionality does it add?
-- Why are these changes needed?
-For bug fixes, include "Fixes #ISSUE" to automatically link to the related issue.
-
+Nothing deploys from this repo - it reaches services through the intermediate library that depends
+on it. Note the tag you expect to cut, and how to roll back (normally a version pin downstream).
 -->
 
-### Details
+## Testing
 
-<!-- Describe how you solved the problem or implemented the feature. -->
-
-### Alternative approaches considered (if applicable)
-
-<!-- If applicable, describe alternative approaches you considered and why you chose this one. -->
-
-### Checklist
-
-The resources of our team are limited. **There are a couple of things that you can do to help us merge your PR faster**:
-
-- [ ] I wrote tests for the changes.
-- [ ] All tests are passing.
-  - If you are testing a Pub/Sub, you can start Docker with `make up`.
-  - You can start with `make test_short` for a quick check.
-  - If you want to run all tests, use `make test`.
-- [ ] Code has no breaking changes.
-- [ ] _(If applicable)_ documentation on [watermill.io](https://watermill.io/) is updated.
-  - Documentation is built in the [github.com/ThreeDotsLabs/watermill/docs](https://github.com/ThreeDotsLabs/watermill/tree/master/docs).
-  - You can find development instructions in the [DEVELOP.md](https://github.com/ThreeDotsLabs/watermill/tree/master/docs/DEVELOP.md).
+<!--
+`make up` starts RabbitMQ, `make test` runs the suite, `make test_short` skips the broker-heavy
+tests. For a change to ack/nack behaviour, say how you proved the test fails without the fix.
+-->

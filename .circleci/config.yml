@@ -1,0 +1,67 @@
+version: 2.1
+
+orbs:
+  go: bigcommerce/internal-go@volatile
+
+executors:
+  # Every test in pkg/amqp needs a live broker, so the orb's stock go/go
+  # executor cannot run them. Pinned to 4.3 deliberately: the acquired-count /
+  # delivery-count split this fork exists to handle only arrived in 4.3, and our
+  # shared RabbitMQ CI image is older than that, so it would not exercise it.
+  go-rabbitmq:
+    parameters:
+      go-version:
+        type: string
+        default: "1.25"
+    resource_class: large
+    docker:
+      - image: cimg/go:<<parameters.go-version>>
+      - image: rabbitmq:4.3-management
+
+job_defaults: &job_defaults
+  env-vars: "TEST=true WATERMILL_TEST_AMQP_URI=amqp://guest:guest@localhost:5672/"
+  # RabbitMQ accepts TCP well before it will complete an AMQP handshake, so wait
+  # on a real connection rather than an open port. The URI is repeated because the
+  # orb applies env-vars to the test step only, not to db-setup.
+  db-setup-cmd: >-
+    WATERMILL_TEST_AMQP_URI=amqp://guest:guest@localhost:5672/
+    go run ./internal/wait-for
+
+workflows:
+  version: 2
+  full:
+    jobs:
+      # go/test-acceptance rather than go/test-unit: no test file here carries a
+      # build tag, so they all compile in under any tag and every one needs the
+      # broker. The stress and reconnect suites are tagged and stay excluded.
+      #
+      # No go/lint job. The orb's lint runs `make lint`, which this repo has no
+      # target for, and linting third-party code to BC house style would make
+      # future rebases onto ThreeDotsLabs harder for no benefit.
+      #
+      # test-args mirrors `make test`. The orb defaults it to empty, which would leave
+      # go test's 10m per-package timeout and -parallel GOMAXPROCS - the suite needs
+      # more of both, since watermill's acceptance matrix fans out into subtests.
+      - go/test-acceptance:
+          name: "test-1_24"
+          e:
+            name: go-rabbitmq
+            go-version: "1.24"
+          test-args: "-timeout 30m -parallel 20"
+          <<: *job_defaults
+      - go/test-acceptance:
+          name: "test-1_25"
+          e:
+            name: go-rabbitmq
+            go-version: "1.25"
+          test-args: "-timeout 30m -parallel 20"
+          <<: *job_defaults
+      # Mirrors `make test_race`, which upstream CI ran and we would otherwise lose.
+      # -short skips the broker-heavy suites, so this job is about the race detector.
+      - go/test-acceptance:
+          name: "test-race"
+          e:
+            name: go-rabbitmq
+            go-version: "1.25"
+          test-args: "-timeout 30m -short -race"
+          <<: *job_defaults

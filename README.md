@@ -1,10 +1,31 @@
 # Watermill AMQP Pub/Sub
 <img align="right" width="200" src="https://watermill.io/img/gopher.svg">
 
-[![CI Status](https://github.com/ThreeDotsLabs/watermill-amqp/actions/workflows/master.yml/badge.svg)](https://github.com/ThreeDotsLabs/watermill-amqp/actions/workflows/master.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/ThreeDotsLabs/watermill-amqp)](https://goreportcard.com/report/github.com/ThreeDotsLabs/watermill-amqp)
-
 This is Pub/Sub for the [Watermill](https://watermill.io/) project.
+
+## BigCommerce fork
+
+Forked from [ThreeDotsLabs/watermill-amqp](https://github.com/ThreeDotsLabs/watermill-amqp) at
+`v3.1.0`, with the module path rewritten to `github.com/bigcommerce/watermill-amqp/v3`. Import it as
+that path; a `replace` directive is not enough, because Go honours `replace` only in the main
+module's `go.mod` and so ignores one added by an intermediate library.
+
+**What diverges from upstream:** the subscriber sends `basic.reject` rather than `basic.nack` when a
+delivery attempt fails. From RabbitMQ 4.3, a quorum queue's `delivery-limit` is evaluated against
+`delivery-count`, which `basic.nack` does not increment - so nacking a message the handler can never
+process redelivers it forever and never dead-letters it. `basic.reject` increments both counters.
+The shutdown paths still nack, so requeueing during a rolling deploy does not consume the queue's
+`delivery-limit` budget. On brokers before 4.3 both verbs incremented the single counter, so this
+matches how these queues behaved there.
+
+Consumers should know that every `msg.Nack()` now counts as a failed delivery, transient failures
+included, and that RabbitMQ 4.0+ defaults `delivery-limit` to 20 on quorum queues. A queue without a
+dead-letter exchange therefore drops a message that keeps failing rather than looping it. Check your
+queues have a dead-letter exchange before taking this fork.
+
+The fix has been offered upstream, so expect rebases onto later ThreeDotsLabs releases: keep the
+BigCommerce-specific changes (module path, CircleCI config) separate from the fix itself so it stays
+cherry-pickable.
 
 
 See [DEVELOPMENT.md](./DEVELOPMENT.md) for more information about running and testing.

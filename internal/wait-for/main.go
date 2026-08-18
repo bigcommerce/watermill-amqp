@@ -6,11 +6,13 @@ import (
 	"time"
 
 	"github.com/ThreeDotsLabs/watermill"
-	"github.com/ThreeDotsLabs/watermill-amqp/v3/pkg/amqp"
+	"github.com/bigcommerce/watermill-amqp/v3/pkg/amqp"
 )
 
 func main() {
-	for i := 0; i < 10; i++ {
+	// RabbitMQ 4.x accepts TCP connections noticeably earlier in boot than it accepts AMQP
+	// handshakes, so allow more headroom here than the 3.x images needed.
+	for i := 0; i < 30; i++ {
 		err := tryConnecting()
 		if err == nil {
 			os.Exit(0)

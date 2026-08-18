@@ -337,12 +337,12 @@ ConsumingLoop:
 		select {
 		case amqpMsg := <-amqpMsgs:
 			if err := s.processMessage(ctx, amqpMsg, s.out, s.logFields); err != nil {
-				s.logger.Error("Processing message failed, sending nack", err, s.logFields)
+				s.logger.Error("Processing message failed, sending reject", err, s.logFields)
 
-				if err := s.nackMsg(amqpMsg); err != nil {
-					s.logger.Error("Cannot nack message", err, s.logFields)
+				if err := s.rejectMsg(amqpMsg); err != nil {
+					s.logger.Error("Cannot reject message", err, s.logFields)
 
-					// something went really wrong when we cannot nack, let's reconnect
+					// something went really wrong when we cannot reject, let's reconnect
 					break ConsumingLoop
 				}
 			}
@@ -431,12 +431,32 @@ func (s *subscription) processMessage(
 		return amqpMsg.Ack(false)
 	case <-msg.Nacked():
 		s.logger.Trace("Message Nacked", msgLogFields)
-		return s.nackMsg(amqpMsg)
+		return s.rejectMsg(amqpMsg)
 	}
 }
 
+// nackMsg returns a message to the queue without counting it as a failed delivery attempt.
+// Used for the shutdown paths: whether or not the handler received the message, it never got the
+// chance to complete, so requeueing must not consume the queue's delivery-limit budget.
+//
+// This is best-effort, and covers only the delivery currently being processed. Closing the channel
+// requeues every other prefetched delivery, and RabbitMQ counts a channel loss as a failed delivery
+// for those, so a subscriber running a PrefetchCount above 1 still spends budget on shutdown.
 func (s *subscription) nackMsg(amqpMsg amqp.Delivery) error {
 	return amqpMsg.Nack(false, !s.config.Consume.NoRequeueOnNack)
+}
+
+// rejectMsg returns a message to the queue and counts it as a failed delivery attempt.
+//
+// RabbitMQ 4.3 split a quorum queue's poison-message tracking into two counters:
+// acquired-count, incremented on every requeue, and delivery-count, incremented only on a
+// failed delivery. delivery-limit is evaluated against delivery-count, and basic.nack does not
+// increment it, so nacking a message that can never be handled loops it forever. basic.reject
+// increments both, which is what lets delivery-limit dead-letter the message.
+//
+// basic.reject has no multiple flag, but every call site here passes multiple=false anyway.
+func (s *subscription) rejectMsg(amqpMsg amqp.Delivery) error {
+	return amqpMsg.Reject(!s.config.Consume.NoRequeueOnNack)
 }
 
 // IsMessageRedelivered checks whether the message was redelivered by AMQP.
