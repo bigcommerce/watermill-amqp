@@ -430,7 +430,9 @@ func (s *subscription) processMessage(
 		s.logger.Trace("Message Acked", msgLogFields)
 		return amqpMsg.Ack(false)
 	case <-msg.Nacked():
-		s.logger.Trace("Message Nacked", msgLogFields)
+		// Nacked names the watermill signal the handler raised; reject is how that reaches
+		// the broker. Both are logged so neither layer is invisible when tracing a message.
+		s.logger.Trace("Message Nacked, sending reject", msgLogFields)
 		return s.rejectMsg(amqpMsg)
 	}
 }
