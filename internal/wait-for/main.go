@@ -10,9 +10,7 @@ import (
 )
 
 func main() {
-	// RabbitMQ 4.x accepts TCP connections noticeably earlier in boot than it accepts AMQP
-	// handshakes, so allow more headroom here than the 3.x images needed.
-	for i := 0; i < 30; i++ {
+	for i := 0; i < 10; i++ {
 		err := tryConnecting()
 		if err == nil {
 			os.Exit(0)
