@@ -437,18 +437,26 @@ func (s *subscription) processMessage(
 	}
 }
 
-// nackMsg returns a message to the queue without counting it as a failed delivery attempt.
+// nackMsg settles a message without counting it as a failed delivery attempt. It requeues, unless
+// Consume.NoRequeueOnNack is set, in which case the broker dead-letters or drops it instead.
+//
 // Used for the shutdown paths: whether or not the handler received the message, it never got the
 // chance to complete, so requeueing must not consume the queue's delivery-limit budget.
 //
-// This is best-effort, and covers only the delivery currently being processed. Closing the channel
-// requeues every other prefetched delivery, and RabbitMQ counts a channel loss as a failed delivery
-// for those, so a subscriber running a PrefetchCount above 1 still spends budget on shutdown.
+// Two known gaps, both best-effort rather than guarantees:
+//
+//   - It covers only the delivery currently being processed. Closing the channel requeues every
+//     other prefetched delivery, and RabbitMQ counts a channel loss as a failed delivery for those,
+//     so a subscriber running a PrefetchCount above 1 still spends budget on shutdown.
+//   - It covers only shutdown via Close. An application that instead cancels the context it passed
+//     to Subscribe fails the in-flight handler, which the router nacks, which reaches the broker as
+//     a reject and does spend budget.
 func (s *subscription) nackMsg(amqpMsg amqp.Delivery) error {
 	return amqpMsg.Nack(false, !s.config.Consume.NoRequeueOnNack)
 }
 
-// rejectMsg returns a message to the queue and counts it as a failed delivery attempt.
+// rejectMsg settles a message and counts it as a failed delivery attempt. Like nackMsg it requeues
+// unless Consume.NoRequeueOnNack is set, in which case the broker dead-letters or drops it.
 //
 // RabbitMQ 4.3 split a quorum queue's poison-message tracking into two counters:
 // acquired-count, incremented on every requeue, and delivery-count, incremented only on a

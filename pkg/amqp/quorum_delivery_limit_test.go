@@ -56,8 +56,10 @@ func TestQuorumQueueDeliveryLimit(t *testing.T) {
 		"x-delivery-limit":       testDeliveryLimit,
 		"x-dead-letter-exchange": deadLetterExchange,
 	}
-	// RabbitMQ 4.3 attaches int-typed x-acquired-count and x-delivery-count headers on redelivery,
-	// which DefaultMarshaler otherwise rejects as non-string metadata.
+	// A quorum queue attaches int-typed counter headers on redelivery, which DefaultMarshaler
+	// otherwise refuses as non-string metadata: x-delivery-count on any version, plus
+	// x-acquired-count from 4.3. Stringifying them is mandatory, not a test convenience - see the
+	// README's note on DefaultMarshaler.
 	config.Marshaler = amqp.DefaultMarshaler{PreprocessDelivery: stringifyHeaders}
 
 	subscriber, err := amqp.NewSubscriber(config, logger)
@@ -119,8 +121,9 @@ ReadLoop:
 // count against delivery-limit and end in the dead-letter queue.
 //
 // The poison pill is an int-typed header, which DefaultMarshaler refuses as non-string metadata.
-// That is not a contrived payload: from 4.3 the broker itself attaches int-typed x-acquired-count
-// and x-delivery-count headers on redelivery.
+// That is not a contrived payload: a quorum queue attaches int-typed counter headers on redelivery
+// on every version, so an unpreprocessed DefaultMarshaler fails every redelivery for that reason
+// alone. Only the first delivery here needs the pill.
 func TestQuorumQueueUnmarshalFailureDeliveryLimit(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping delivery-limit integration test in short mode")

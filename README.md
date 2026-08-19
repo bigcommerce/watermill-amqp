@@ -23,6 +23,46 @@ included, and that RabbitMQ 4.0+ defaults `delivery-limit` to 20 on quorum queue
 dead-letter exchange therefore drops a message that keeps failing rather than looping it. Check your
 queues have a dead-letter exchange before taking this fork.
 
+### `DefaultMarshaler` needs `PreprocessDelivery` on quorum queues
+
+**On a quorum queue, `DefaultMarshaler` cannot read a redelivered message unless you give it a
+`PreprocessDelivery` that stringifies headers.** This is not specific to the fork, but the fork makes
+it much easier to get burned by, so it is worth stating plainly.
+
+A quorum queue attaches int-typed counter headers to a redelivery - `x-delivery-count` on any
+version, plus `x-acquired-count` from 4.3. `DefaultMarshaler.Unmarshal` requires every header to be a
+string and returns an error otherwise, so it fails on redelivery for that reason alone, before the
+handler is reached. `processMessage` then rejects the message itself.
+
+The consequence is that a *single* `msg.Nack()` is enough to exhaust `delivery-limit`, because each
+redelivery fails at unmarshal in milliseconds rather than being retried by your handler. That
+defeats the point of the limit, and it also defeats the shutdown paths above: a message requeued by a
+rolling deploy comes back carrying a counter header, so the next consumer cannot read it either.
+
+Fix it when you build the config:
+
+```go
+import (
+	stdAmqp "github.com/rabbitmq/amqp091-go"
+	"github.com/bigcommerce/watermill-amqp/v3/pkg/amqp"
+)
+
+config.Marshaler = amqp.DefaultMarshaler{
+	PreprocessDelivery: func(delivery stdAmqp.Delivery) stdAmqp.Delivery {
+		for key, value := range delivery.Headers {
+			if _, ok := value.(string); !ok {
+				delivery.Headers[key] = fmt.Sprintf("%v", value)
+			}
+		}
+
+		return delivery
+	},
+}
+```
+
+A custom marshaler that tolerates non-string headers works equally well. If you are reaching this
+library through an internal wrapper, check whether it already does this before adding your own.
+
 The fix has been offered upstream, so expect rebases onto later ThreeDotsLabs releases: keep the
 BigCommerce-specific changes (module path, CircleCI config) separate from the fix itself so it stays
 cherry-pickable.
