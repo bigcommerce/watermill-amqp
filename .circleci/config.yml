@@ -5,22 +5,26 @@ orbs:
 
 executors:
   # Every test in pkg/amqp needs a live broker, so the orb's stock go/go
-  # executor cannot run them. Pinned to 4.3 deliberately: the acquired-count /
-  # delivery-count split this fork exists to handle only arrived in 4.3, and our
-  # shared RabbitMQ CI image is older than that, so it would not exercise it.
+  # executor cannot run them. Broker version is a parameter because this fork's
+  # whole purpose is version-specific ack semantics, so it has to be tested on
+  # both sides of the 4.3 counter split. Exact patch versions, not floating
+  # minor tags: a drifting broker would silently change what these tests assert.
   go-rabbitmq:
     parameters:
       go-version:
         type: string
         default: "1.25"
+      rabbitmq-version:
+        type: string
+        default: "4.3.4"
     resource_class: large
     docker:
       - image: cimg/go:<<parameters.go-version>>
-      - image: rabbitmq:4.3-management
+      - image: rabbitmq:<<parameters.rabbitmq-version>>-management
 
 job_defaults: &job_defaults
   env-vars: "TEST=true WATERMILL_TEST_AMQP_URI=amqp://guest:guest@localhost:5672/"
-  # RabbitMQ accepts TCP well before it will complete an AMQP handshake, so wait
+  # RabbitMQ opens the AMQP port ~2.5s before it will complete a connection, so wait
   # on a real connection rather than an open port. The URI is repeated because the
   # orb applies env-vars to the test step only, not to db-setup.
   db-setup-cmd: >-
@@ -64,4 +68,24 @@ workflows:
             name: go-rabbitmq
             go-version: "1.25"
           test-args: "-timeout 30m -short -race"
+          <<: *job_defaults
+      # Guards the claim this fork rests on: switching nack to reject is a no-op on
+      # pre-4.3 brokers, because before the counter split both verbs incremented the
+      # single counter delivery-limit was evaluated against. Verified locally on
+      # 4.1.8 - both regression tests pass with and without the fix, whereas on 4.3
+      # the unpatched code loops past 43,000 redeliveries without dead-lettering.
+      #
+      # 4.1.x is also the configuration the fix ships into first in practice, since
+      # a service picks up a library bump long before its broker is upgraded.
+      #
+      # Scoped to the quorum tests rather than the full suite. The rest of the suite
+      # is broker-version-agnostic, so running it again here would double CI time and
+      # add flake surface on an older broker for no extra signal.
+      - go/test-acceptance:
+          name: "test-rabbitmq-4_1"
+          e:
+            name: go-rabbitmq
+            go-version: "1.25"
+            rabbitmq-version: "4.1.8"
+          test-args: "-timeout 10m -run TestQuorumQueue"
           <<: *job_defaults
