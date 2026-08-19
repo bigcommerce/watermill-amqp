@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/ThreeDotsLabs/watermill"
-	"github.com/ThreeDotsLabs/watermill-amqp/v3/pkg/amqp"
+	"github.com/bigcommerce/watermill-amqp/v3/pkg/amqp"
 )
 
 func main() {

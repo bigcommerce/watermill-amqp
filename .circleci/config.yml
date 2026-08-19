@@ -1,0 +1,93 @@
+version: 2.1
+
+orbs:
+  go: bigcommerce/internal-go@volatile
+
+executors:
+  # Every test in pkg/amqp needs a live broker, so the orb's stock go/go
+  # executor cannot run them. Broker version is a parameter because this fork's
+  # whole purpose is version-specific ack semantics, so it has to be tested on
+  # both sides of the 4.3 counter split. Exact patch versions, not floating
+  # minor tags: a drifting broker would silently change what these tests assert.
+  go-rabbitmq:
+    parameters:
+      go-version:
+        type: string
+        default: "1.25"
+      rabbitmq-version:
+        type: string
+        default: "4.3.4"
+    resource_class: large
+    docker:
+      - image: cimg/go:<<parameters.go-version>>
+      - image: rabbitmq:<<parameters.rabbitmq-version>>-management
+
+job_defaults: &job_defaults
+  env-vars: "TEST=true WATERMILL_TEST_AMQP_URI=amqp://guest:guest@localhost:5672/"
+  # RabbitMQ opens the AMQP port ~2.5s before it will complete a connection, so wait
+  # on a real connection rather than an open port. The URI is repeated because the
+  # orb applies env-vars to the test step only, not to db-setup.
+  db-setup-cmd: >-
+    WATERMILL_TEST_AMQP_URI=amqp://guest:guest@localhost:5672/
+    go run ./internal/wait-for
+
+workflows:
+  version: 2
+  full:
+    jobs:
+      # go/test-acceptance rather than go/test-unit: no test file carries the orb's
+      # unit or integration tags, so they all build under any tag, and every test in
+      # pkg/amqp needs the broker. The stress and reconnect suites carry their own
+      # tags (stress, reconnect) and stay excluded because nothing passes those.
+      #
+      # No go/lint job. The orb's lint runs `make lint`, which this repo has no
+      # target for, and linting third-party code to BC house style would make
+      # future rebases onto ThreeDotsLabs harder for no benefit.
+      #
+      # test-args takes -parallel 20 from `make test`. The -timeout is ours: the
+      # orb defaults test-args to empty, which would leave go test's 10m
+      # per-package default. The full suite takes ~80s locally, so 30m is only
+      # headroom for a slower container, not a measured requirement.
+      - go/test-acceptance:
+          name: "test-1_24"
+          e:
+            name: go-rabbitmq
+            go-version: "1.24"
+          test-args: "-timeout 30m -parallel 20"
+          <<: *job_defaults
+      - go/test-acceptance:
+          name: "test-1_25"
+          e:
+            name: go-rabbitmq
+            go-version: "1.25"
+          test-args: "-timeout 30m -parallel 20"
+          <<: *job_defaults
+      # Mirrors `make test_race`, which upstream CI ran and we would otherwise lose.
+      # -short skips the broker-heavy suites, so this job is about the race detector.
+      - go/test-acceptance:
+          name: "test-race"
+          e:
+            name: go-rabbitmq
+            go-version: "1.25"
+          test-args: "-timeout 30m -short -race"
+          <<: *job_defaults
+      # Guards the claim this fork rests on: switching nack to reject is a no-op on
+      # pre-4.3 brokers, because before the counter split both verbs incremented the
+      # single counter delivery-limit was evaluated against. Verified locally on
+      # 4.1.8 - both regression tests pass with and without the fix, whereas on 4.3
+      # the unpatched code loops past 43,000 redeliveries without dead-lettering.
+      #
+      # 4.1.x is also the configuration the fix ships into first in practice, since
+      # a service picks up a library bump long before its broker is upgraded.
+      #
+      # Scoped to the quorum tests rather than the full suite. The rest of the suite
+      # is broker-version-agnostic, so running it again here would double CI time and
+      # add flake surface on an older broker for no extra signal.
+      - go/test-acceptance:
+          name: "test-rabbitmq-4_1"
+          e:
+            name: go-rabbitmq
+            go-version: "1.25"
+            rabbitmq-version: "4.1.8"
+          test-args: "-timeout 10m -run TestQuorumQueue"
+          <<: *job_defaults
