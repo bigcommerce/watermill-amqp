@@ -107,11 +107,32 @@ func publishOne(t *testing.T, config amqp.Config, logger watermill.LoggerAdapter
 func receiveWithin(t *testing.T, messages <-chan *message.Message, payload string, within time.Duration) {
 	t.Helper()
 
-	deadline := time.After(within)
+	deadline := time.Now().Add(within)
+
+	// Counted and reported once rather than logged per message: the zero-value deliveries above
+	// arrive as fast as this loop acks them, so logging each one buries the useful output.
+	skipped := 0
+	defer func() {
+		if skipped > 0 {
+			t.Logf("acked %d unwanted deliveries while waiting for %q", skipped, payload)
+		}
+	}()
 
 	for {
+		// Checked before each receive rather than raced against it as a select case. A select with
+		// both cases ready picks one at random, so an uninterrupted run of zero-value deliveries
+		// could keep winning and hang this until go test's package timeout instead of failing here.
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			t.Fatalf("did not receive %q within %s", payload, within)
+		}
+
+		timeout := time.NewTimer(remaining)
+
 		select {
 		case msg, ok := <-messages:
+			timeout.Stop()
+
 			if !ok {
 				t.Fatalf("message channel closed while waiting for %q", payload)
 			}
@@ -123,8 +144,8 @@ func receiveWithin(t *testing.T, messages <-chan *message.Message, payload strin
 				return
 			}
 
-			t.Logf("acked %q while waiting for %q", received, payload)
-		case <-deadline:
+			skipped++
+		case <-timeout.C:
 			t.Fatalf("did not receive %q within %s", payload, within)
 		}
 	}
