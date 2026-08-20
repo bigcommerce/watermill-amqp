@@ -39,6 +39,10 @@ workflows:
       # unit or integration tags, so they all build under any tag, and every test in
       # pkg/amqp needs the broker. The stress and reconnect suites carry their own
       # tags (stress, reconnect) and stay excluded because nothing passes those.
+      # Upstream's tagged reconnect test shells out to "docker-compose restart
+      # rabbitmq", which cannot reach a CI service container, so it stays local-only;
+      # TestReconnectAfterConnectionLoss covers the same path untagged by dropping the
+      # connection from the client side instead.
       #
       # No go/lint job. The orb's lint runs `make lint`, which this repo has no
       # target for, and linting third-party code to BC house style would make
@@ -80,14 +84,16 @@ workflows:
       # 4.1.x is also the configuration the fix ships into first in practice, since
       # a service picks up a library bump long before its broker is upgraded.
       #
-      # Scoped to the quorum tests rather than the full suite. The rest of the suite
+      # Scoped to the quorum and reconnect tests rather than the full suite. The rest
       # is broker-version-agnostic, so running it again here would double CI time and
-      # add flake surface on an older broker for no extra signal.
+      # add flake surface on an older broker for no extra signal. Reconnection earns
+      # its place because re-establishing a connection means renegotiating it, and
+      # amqp091-go tightened frame-size and TLS handling in the versions pinned here.
       - go/test-acceptance:
           name: "test-rabbitmq-4_1"
           e:
             name: go-rabbitmq
             go-version: "1.25"
             rabbitmq-version: "4.1.8"
-          test-args: "-timeout 10m -run TestQuorumQueue"
+          test-args: "-timeout 10m -run 'TestQuorumQueue|TestReconnectAfterConnectionLoss'"
           <<: *job_defaults
