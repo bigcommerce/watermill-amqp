@@ -22,7 +22,9 @@ const minRabbitMQMajor, minRabbitMQMinor = 3, 8
 const (
 	testDeliveryLimit   = 3
 	deliveryCountHeader = "x-delivery-count"
-	quietPeriod         = 5 * time.Second
+	// Must exceed the worst-case redelivery gap on a loaded CI runner, since silence is
+	// how the read loop decides the broker has stopped redelivering.
+	quietPeriod = 15 * time.Second
 )
 
 // TestQuorumQueueDeliveryLimit checks a forever-failing handler is dead-lettered at
@@ -59,7 +61,9 @@ func TestQuorumQueueDeliveryLimit(t *testing.T) {
 	publisher, err := amqp.NewPublisher(config, logger)
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	// Generous: the read loop waits out quietPeriod and dead-lettering is polled after it.
+	// Cancelling early closes the messages channel and fails the length assertion instead.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
 	messages, err := subscriber.Subscribe(ctx, topic)
@@ -98,8 +102,12 @@ ReadLoop:
 		deliveryCounts,
 	)
 
-	assert.Eventually(t, func() bool {
-		return queueDepth(t, deadLetterQueue) == 1
+	// EventuallyWithT, not Eventually: the condition runs off the test goroutine, where a
+	// require failure would Goexit the poller and hide the real AMQP error.
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		depth, err := queueDepth(deadLetterQueue)
+		assert.NoError(c, err)
+		assert.Equal(c, 1, depth)
 	}, 20*time.Second, time.Second, "message was not dead-lettered once delivery-limit was reached")
 }
 
@@ -116,29 +124,44 @@ func skipUnlessRabbitMQAtLeast(t *testing.T, major, minor int) {
 	version, _ := connection.Properties["version"].(string)
 	require.NotEmpty(t, version, "broker did not advertise a version property")
 
-	if !rabbitMQAtLeast(version, major, minor) {
+	atLeast, err := rabbitMQAtLeast(version, major, minor)
+	require.NoErrorf(t, err, "refusing to skip the delivery-limit regression test on an unparseable broker version")
+
+	if !atLeast {
 		t.Skipf("requires RabbitMQ >= %d.%d (quorum queues), got %s", major, minor, version)
 	}
 }
 
-func rabbitMQAtLeast(version string, major, minor int) bool {
+// rabbitMQAtLeast errors rather than returning false on an unparseable version, so a
+// version it cannot read fails the build instead of silently skipping the regression.
+func rabbitMQAtLeast(version string, major, minor int) (bool, error) {
 	var maj, min int
 	if _, err := fmt.Sscanf(version, "%d.%d", &maj, &min); err != nil {
-		return false
+		return false, fmt.Errorf("parse RabbitMQ version %q: %w", version, err)
 	}
 	if maj != major {
-		return maj > major
+		return maj > major, nil
 	}
-	return min >= minor
+	return min >= minor, nil
 }
 
 func TestRabbitMQAtLeast(t *testing.T) {
-	assert.True(t, rabbitMQAtLeast("3.8.0", 3, 8))
-	assert.True(t, rabbitMQAtLeast("3.9.1", 3, 8))
-	assert.True(t, rabbitMQAtLeast("4.3.0", 3, 8))
-	assert.False(t, rabbitMQAtLeast("3.7.28", 3, 8))
-	assert.False(t, rabbitMQAtLeast("2.0.0", 3, 8))
-	assert.False(t, rabbitMQAtLeast("not-a-version", 3, 8))
+	for version, expected := range map[string]bool{
+		"3.8.0":  true,
+		"3.9.1":  true,
+		"4.3.0":  true,
+		"3.7.28": false,
+		"2.0.0":  false,
+	} {
+		atLeast, err := rabbitMQAtLeast(version, 3, 8)
+		require.NoError(t, err, version)
+		assert.Equal(t, expected, atLeast, version)
+	}
+
+	for _, version := range []string{"not-a-version", "4", ""} {
+		_, err := rabbitMQAtLeast(version, 3, 8)
+		assert.Error(t, err, version)
+	}
 }
 
 func stringifyHeaders(delivery stdAmqp.Delivery) stdAmqp.Delivery {
@@ -176,16 +199,26 @@ func declareDeadLetterTopology(t *testing.T, exchange, queue string) {
 	})
 }
 
-func queueDepth(t *testing.T, queue string) int {
-	t.Helper()
+// queueDepth takes no *testing.T so it is safe to call from a polling goroutine.
+func queueDepth(queue string) (int, error) {
+	connection, err := stdAmqp.Dial(amqpURI())
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = connection.Close() }()
 
-	channel, closeChannel := amqpChannel(t)
-	defer closeChannel()
+	channel, err := connection.Channel()
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = channel.Close() }()
 
 	q, err := channel.QueueDeclarePassive(queue, true, false, false, false, nil)
-	require.NoError(t, err)
+	if err != nil {
+		return 0, err
+	}
 
-	return q.Messages
+	return q.Messages, nil
 }
 
 func deleteQueueOnCleanup(t *testing.T, queue string) {

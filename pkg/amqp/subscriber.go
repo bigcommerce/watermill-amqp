@@ -435,13 +435,16 @@ func (s *subscription) processMessage(
 	}
 }
 
-// nackMsg requeues without counting a failed delivery. Used on shutdown paths.
+// nackMsg requeues unless NoRequeueOnNack is set. Used on shutdown paths: on RabbitMQ
+// >= 4.3 basic.nack leaves quorum delivery-count untouched, so a restart is not
+// charged against delivery-limit.
 func (s *subscription) nackMsg(amqpMsg amqp.Delivery) error {
 	return amqpMsg.Nack(false, !s.config.Consume.NoRequeueOnNack)
 }
 
-// rejectMsg requeues and counts a failed delivery. On RabbitMQ 4.3 quorum queues,
-// delivery-limit tracks delivery-count, which basic.nack does not increment.
+// rejectMsg requeues unless NoRequeueOnNack is set, and counts a failed delivery. On
+// RabbitMQ >= 4.3 quorum delivery-limit tracks delivery-count, which basic.nack does
+// not increment.
 func (s *subscription) rejectMsg(amqpMsg amqp.Delivery) error {
 	return amqpMsg.Reject(!s.config.Consume.NoRequeueOnNack)
 }

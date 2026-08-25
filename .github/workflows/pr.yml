@@ -10,17 +10,4 @@ jobs:
 
   # 4.3: runs the quorum delivery-limit regression (nack vs reject counter split).
   rabbitmq-4-3:
-    name: tests (RabbitMQ 4.3)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v4
-        with:
-          go-version: '^1.26'
-      - run: make up_rabbitmq_4.3
-      - run: make wait
-      - run: make test
-        timeout-minutes: 30
-      - name: Dump docker logs on failure
-        if: failure()
-        uses: jwalton/gh-docker-logs@a8cb5301950dd4d2b86619cd487b3b281526b178 # v2.2.0
+    uses: ./.github/workflows/rabbitmq-4-3.yml
